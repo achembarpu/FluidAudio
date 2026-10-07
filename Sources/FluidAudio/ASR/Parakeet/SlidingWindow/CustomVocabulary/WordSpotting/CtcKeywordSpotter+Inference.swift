@@ -234,8 +234,6 @@ extension CtcKeywordSpotter {
     // MARK: - Audio Preparation
 
     private func prepareAudioArray(_ audioSamples: [Float]) throws -> (MLMultiArray, Int) {
-        let clampedCount = min(audioSamples.count, maxModelSamples)
-
         // Detect expected input rank from the MelSpectrogram model's 'audio' feature description.
         // Canary-1b-v2 expects rank 1 [samples], parakeet-ctc-0.6b expects rank 2 [1, samples].
         let melModel = models.melSpectrogram
@@ -255,10 +253,7 @@ extension CtcKeywordSpotter {
             array = try MLMultiArray(shape: [NSNumber(value: maxModelSamples)], dataType: dataType)
         }
 
-        // Copy actual samples (MLMultiArray is zero-initialized, so padding is implicit).
-        for i in 0..<clampedCount {
-            array[i] = NSNumber(value: audioSamples[i])
-        }
+        let clampedCount = Self.copyAndPadAudio(audioSamples, into: array)
 
         if debugMode {
             let midpoint = clampedCount / 2
@@ -276,6 +271,21 @@ extension CtcKeywordSpotter {
         }
 
         return (array, clampedCount)
+    }
+
+    /// Populate the fixed-size input, returning the number of copied samples.
+    static func copyAndPadAudio(_ audioSamples: [Float], into array: MLMultiArray) -> Int {
+        let clampedCount = min(audioSamples.count, array.count)
+        // Core ML leaves newly allocated storage uninitialized. The model
+        // receives the entire fixed-size array, including the padded tail.
+        // Reuse the bulk zero-fill helper; full windows overwrite every sample.
+        if clampedCount < array.count {
+            array.reset(to: 0)
+        }
+        for i in 0..<clampedCount {
+            array[i] = NSNumber(value: audioSamples[i])
+        }
+        return clampedCount
     }
 
     private func makeAudioFeatureProvider(array: MLMultiArray, length: Int) throws -> MLFeatureProvider {
