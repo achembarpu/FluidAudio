@@ -764,6 +764,18 @@ struct ChunkProcessor {
         initialTimeIndexOverride: Int? = nil
     ) async throws -> (tokens: [Int], timestamps: [Int], confidences: [Float], durations: [Int]) {
         guard !samples.isEmpty else { return ([], [], [], []) }
+        try Task.checkCancellation()
+        let cache = await manager.experimentalBatchWindowCache
+        let key = cache.map { _ in
+            BatchWindowReuseCache.Key(
+                samples: samples, contextSamples: contextSamples, chunkStart: chunkStart,
+                isLastChunk: isLastChunk, maxModelSamples: maxModelSamples, language: language,
+                emitTokensAfterFrame: emitTokensAfterFrame, initialTimeIndex: initialTimeIndexOverride)
+        }
+        if let cache, let key, let value = await cache.value(for: key) {
+            try Task.checkCancellation()
+            return (value.tokens, value.timestamps, value.confidences, value.durations)
+        }
 
         let paddedChunk = manager.padAudioIfNeeded(samples, targetLength: maxModelSamples)
 
@@ -792,6 +804,12 @@ struct ChunkProcessor {
 
         if hypothesis.isEmpty || encoderSequenceLength == 0 {
             return ([], [], [], [])
+        }
+
+        try Task.checkCancellation()
+        if let cache, let key {
+            await cache.store(.init(tokens: hypothesis.ySequence, timestamps: hypothesis.timestamps,
+                confidences: hypothesis.tokenConfidences, durations: hypothesis.tokenDurations), for: key)
         }
 
         return (hypothesis.ySequence, hypothesis.timestamps, hypothesis.tokenConfidences, hypothesis.tokenDurations)

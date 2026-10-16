@@ -16,6 +16,7 @@ public actor AsrManager {
 
     /// The AsrModels instance if initialized with models
     internal var asrModels: AsrModels?
+    internal var experimentalBatchWindowCache: BatchWindowReuseCache?
 
     internal let progressEmitter = ProgressEmitter()
 
@@ -108,9 +109,11 @@ public actor AsrManager {
         }
     }
 
-    internal func makeWorkerClone() -> AsrManager? {
+    internal func makeWorkerClone() async -> AsrManager? {
         guard let models = asrModels else { return nil }
-        return AsrManager(config: config, models: models)
+        let clone = AsrManager(config: config, models: models)
+        await clone.shareBatchWindowReuseExperiment(experimentalBatchWindowCache)
+        return clone
     }
 
     /// Returns the current transcription progress stream for offline long audio (>240,000 samples / ~15s).
@@ -138,6 +141,7 @@ public actor AsrManager {
     /// - Parameter models: Pre-loaded ASR models
     public func loadModels(_ models: AsrModels) async throws {
         logger.info("Loading AsrManager with provided models")
+        detachBatchWindowReuseExperiment()
 
         self.asrModels = models
         self.preprocessorModel = models.preprocessor
@@ -215,10 +219,12 @@ public actor AsrManager {
     }
 
     public func reset() {
+        detachBatchWindowReuseExperiment()
         Task { await sharedMLArrayCache.clear() }
     }
 
     public func cleanup() {
+        detachBatchWindowReuseExperiment()
         asrModels = nil
         preprocessorModel = nil
         encoderModel = nil
